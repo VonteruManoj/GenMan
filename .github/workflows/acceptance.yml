@@ -1,0 +1,67 @@
+name: Acceptance Test
+
+on:
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgresql:
+        image: ankane/pgvector
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_USER: zingtree
+          POSTGRES_PASSWORD: zingtree
+          POSTGRES_DB: zingtree
+
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_DATABASE: zingtree_ai_testing
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_USER: zingtree
+          MYSQL_PASSWORD: zingtree
+          MYSQL_ROOT_PASSWORD: zingtree
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        id: setup-python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Install and configure Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --no-root
+
+      - name: Code Quality
+        run: poetry run flake8
+
+      - name: Pytest Run
+        run: poetry run pytest -c pytest.gh.ini --cov --cov-fail-under=80

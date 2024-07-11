@@ -1,0 +1,143 @@
+name: CD (Build and Deploy)
+
+on:
+  push:
+    branches:
+    - develop
+    - release/**
+    - hotfix/**
+    - dev/**
+    - feature/**
+    - issue/**
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Select environment to deploy to'
+        required: true
+        type: choice
+        options:
+        - env1
+        - env2
+        - env3
+        - test
+        - uat
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Calculate SHA
+      run: echo "SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+    - name: Set up Python 3.11
+      id: setup-python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - name: Install and configure Poetry
+      uses: snok/install-poetry@v1
+      with:
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        installer-parallel: true
+
+    - name: Load cached venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v3
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+    - name: Install dependencies
+      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+      run: poetry install --no-interaction --no-root
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Get build identification data
+      id: get-build-data
+      run: |
+        export BRANCH=$(basename $GITHUB_REF)
+        echo "NAME=$(basename $GITHUB_REPOSITORY)" >> $GITHUB_OUTPUT
+        echo "SHA=$SHA" >> $GITHUB_OUTPUT
+        echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
+        echo "REPOSITORY=zingtree" >> $GITHUB_OUTPUT
+        echo "RELEASE_STRING=$BRANCH - $SHA (built $(date))"
+
+    - name: Build and push
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.get-build-data.outputs.REPOSITORY }}/${{ steps.get-build-data.outputs.NAME }}:${{ steps.get-build-data.outputs.SHA }},${{ steps.get-build-data.outputs.REPOSITORY }}/${{ steps.get-build-data.outputs.NAME }}:${{ steps.get-build-data.outputs.BRANCH }}
+        build-args: release_string=${{ steps.get-build-data.outputs.RELEASE_STRING }}
+        platforms: linux/amd64,linux/arm64
+
+    - name: Pull zt-k8s repo
+      if: github.event_name == 'workflow_dispatch'
+      uses: actions/checkout@v4
+      with:
+        repository: 'Zingtree-Inc/zt-k8s.git'
+        ref: develop
+        token: ${{ secrets.GHA_DEPLOYER }}
+
+    - name: Set K8s Image Tag for manually specified environment
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        ENV_TAG="${{ github.event.inputs.environment }}"
+
+        cd $GITHUB_WORKSPACE/apps/env/${ENV_TAG}/ai-core
+
+        # Update the image tag in kustomization.yml
+        sed -i "s/newTag: .*/newTag: $SHA/" kustomization.yml
+
+        # Commit and push changes
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+        git add kustomization.yml
+        git commit -m "$ENV_TAG | Updated image tag to $SHA"
+        git push origin develop
+
+      ## Slack Notify 
+    - name: Slack Notification
+      if: always() # Ensures this step runs regardless of previous step results
+      id: slack-notify
+      run: |
+        export NAME=$(basename $GITHUB_REPOSITORY)
+        export BRANCH=$(basename $GITHUB_REF)
+        export RUN_ID=${{ github.run_id }}
+        export REPO_URL="https://github.com/${{ github.repository }}/actions/runs/$RUN_ID"
+
+
+        # Set the default message for success
+        MESSAGE="Completed build of $NAME/$BRANCH ($SHA)."
+
+        # Determine the message based on the trigger type and job status
+        if [ "${{ github.event_name }}" == 'workflow_dispatch' ]; then
+          ENV_TAG="${{ github.event.inputs.environment }}"
+          MESSAGE="Completed build of $NAME/$BRANCH ($SHA). K8s manifest for ${ENV_TAG} has been updated. :rocket: ai-service will be deployed via Argo within the next couple minutes..."
+        fi
+
+        # Check if the job failed and set the failure message
+        if [ "${{ job.status }}" != 'success' ]; then
+          MESSAGE="Build failed for $NAME/$BRANCH ($SHA). Please check the Actions logs at $REPO_URL."
+        fi
+
+        # Send the notification to Slack
+        curl -s -X POST -H 'Content-type: application/json' \
+        --data "{\"text\":\"$MESSAGE\"}" \
+        ${{ secrets.SLACK_WEBHOOK }}

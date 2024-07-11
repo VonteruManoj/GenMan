@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package services;
+
+message NotificationResponse {
+    string id = 1;
+    int32 orgId = 2;
+    int32 connectorId = 3;
+    int32 dur = 4;
+    FailureStatus status = 6;
+    string reason = 7;
+    ArticleState state = 5;
+    string jobId = 8;
+}
+
+enum FailureStatus {
+    SUCCESS = 0;
+    FAILED = 1;
+}
+
+enum ArticleState {
+	RUNNING = 0;
+	CONNECTION_FAILED = 1;
+	DOWNLOADING = 2;
+	DOWNLOAD_FAILED = 3;
+	STANDARDIZING = 4;
+	STANDARDIZING_FAILED = 5;
+	UPLOADING = 6;
+	UPLOAD_FAILED = 7;
+	NORMALIZING = 8;
+	NORMALIZING_FAILED = 9;
+	EMBEDDING = 10;
+	EMBEDDING_FAILED = 11;
+	COMPLETE = 12;
+}

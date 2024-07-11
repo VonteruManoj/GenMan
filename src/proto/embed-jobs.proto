@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package services;
+
+message ArticleNotification {
+    string id = 1;
+    string articleId = 2;
+    int32 orgId = 3;
+    int32 connectorId = 4;
+    string source = 5;
+    int64 timestamp = 6;
+    ArticleOperation operation = 7;
+    Location location = 8;
+    string jobId = 9;
+}
+
+message Location {
+    string bucket = 1;
+    string region = 2;
+    string path = 3;
+}
+
+enum ArticleOperation {
+    CREATE = 0;
+    UPDATE = 1;
+    DELETE = 2;
+}
